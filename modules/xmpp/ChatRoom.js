@@ -617,9 +617,10 @@ export default class ChatRoom extends Listenable {
             switch (node.tagName) {
             case 'nick':
                 if (!member.isFocus) {
+                    const realJid = Strophe.getBareJidFromJid(member.jid).split('@')[0];
                     const displayName
                         = this.xmpp.options.displayJids
-                            ? Strophe.getResourceFromJid(from)
+                            ? realJid
                             : member.nick;
 
                     this.eventEmitter.emit(
