@@ -9,6 +9,7 @@ import * as JitsiConnectionErrors from '../../JitsiConnectionErrors';
 import * as JitsiConnectionEvents from '../../JitsiConnectionEvents';
 import browser from '../browser';
 import MucConnectionPlugin from './strophe.emuc';
+import VCardConnectionPlugin from './strophe.vcard';
 import JingleConnectionPlugin from './strophe.jingle';
 import initStropheUtil from './strophe.util';
 import PingConnectionPlugin from './strophe.ping';
@@ -639,6 +640,7 @@ export default class XMPP extends Listenable {
                 = this.options.p2p.iceTransportPolicy;
         }
 
+        this.connection.addConnectionPlugin('vcard', new VCardConnectionPlugin(this));
         this.connection.addConnectionPlugin('emuc', new MucConnectionPlugin(this));
         this.connection.addConnectionPlugin('jingle', new JingleConnectionPlugin(this, this.eventEmitter, iceConfig));
         this.connection.addConnectionPlugin('ping', new PingConnectionPlugin(this));

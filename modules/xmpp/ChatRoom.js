@@ -622,7 +622,14 @@ export default class ChatRoom extends Listenable {
                         = this.xmpp.options.displayJids
                             ? realJid
                             : member.nick;
-
+                    this.connection.vcard.get(function(arg) {
+                        console.log('[avp] **********************');
+                        console.log(arg);
+                    }, Strophe.getBareJidFromJid(member.jid),
+                                              function(args) {
+                                                  console.log('[avp] ********************** ERROR');
+                                                  console.log(args);
+                                              });
                     this.eventEmitter.emit(
                         XMPPEvents.DISPLAY_NAME_CHANGED,
                         from,
@@ -646,7 +653,6 @@ export default class ChatRoom extends Listenable {
                             properties[attributes.key] = attributes.value;
                         }
                     }
-
                     this.eventEmitter.emit(
                         XMPPEvents.CONFERENCE_PROPERTIES_CHANGED, properties);
                 }
