@@ -633,6 +633,10 @@ export default class ChatRoom extends Listenable {
                             function(args) {
                                 console.log('[avp] ERROR: Could not get VCard for '
                                             + Strophe.getBareJidFromJid(member.jid));
+                                chatRoom.eventEmitter.emit(
+                                    XMPPEvents.DISPLAY_NAME_CHANGED,
+                                    from,
+                                    realJid);
                             }
                         );
                     } else {
