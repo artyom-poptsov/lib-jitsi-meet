@@ -619,14 +619,15 @@ export default class ChatRoom extends Listenable {
                 if (!member.isFocus) {
                     if (this.xmpp.options.displayJids) {
                         const realJid = Strophe.getBareJidFromJid(member.jid).split('@')[0];
+                        const chatRoom = this;
                         this.connection.vcard.get(
                             function(arg) {
                                 console.log('[avp] VCard: ');
                                 console.log(arg);
-                                this.eventEmitter.emit(
+                                chatRoom.eventEmitter.emit(
                                     XMPPEvents.DISPLAY_NAME_CHANGED,
                                     from,
-                                    arg.textContent + '\n(' + realJid + ')');
+                                    arg.textContent + ' (' + realJid + ')');
                             },
                             Strophe.getBareJidFromJid(member.jid),
                             function(args) {
