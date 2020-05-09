@@ -617,23 +617,29 @@ export default class ChatRoom extends Listenable {
             switch (node.tagName) {
             case 'nick':
                 if (!member.isFocus) {
-                    const realJid = Strophe.getBareJidFromJid(member.jid).split('@')[0];
-                    const displayName
-                        = this.xmpp.options.displayJids
-                            ? realJid
-                            : member.nick;
-                    this.connection.vcard.get(function(arg) {
-                        console.log('[avp] **********************');
-                        console.log(arg);
-                    }, Strophe.getBareJidFromJid(member.jid),
-                                              function(args) {
-                                                  console.log('[avp] ********************** ERROR');
-                                                  console.log(args);
-                                              });
-                    this.eventEmitter.emit(
-                        XMPPEvents.DISPLAY_NAME_CHANGED,
-                        from,
-                        displayName);
+                    if (this.xmpp.options.displayJids) {
+                        const realJid = Strophe.getBareJidFromJid(member.jid).split('@')[0];
+                        this.connection.vcard.get(
+                            function(arg) {
+                                console.log('[avp] VCard: ');
+                                console.log(arg);
+                                this.eventEmitter.emit(
+                                    XMPPEvents.DISPLAY_NAME_CHANGED,
+                                    from,
+                                    arg.textContent + '\n(' + realJid + ')');
+                            },
+                            Strophe.getBareJidFromJid(member.jid),
+                            function(args) {
+                                console.log('[avp] ERROR: Could not get VCard for '
+                                            + Strophe.getBareJidFromJid(member.jid));
+                            }
+                        );
+                    } else {
+                        this.eventEmitter.emit(
+                            XMPPEvents.DISPLAY_NAME_CHANGED,
+                            from,
+                            member.nick);
+                    }
                 }
                 break;
             case 'bridgeNotAvailable':
