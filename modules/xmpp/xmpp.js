@@ -10,13 +10,8 @@ import XMPPEvents from '../../service/xmpp/XMPPEvents';
 import browser from '../browser';
 
 // BEGIN From the old branch
-import MucConnectionPlugin from './strophe.emuc';
 import VCardConnectionPlugin from './strophe.vcard';
-import JingleConnectionPlugin from './strophe.jingle';
-import initStropheUtil from './strophe.util';
 import PingConnectionPlugin from './strophe.ping';
-import RayoConnectionPlugin from './strophe.rayo';
-import initStropheLogger from './strophe.logger';
 // END
 
 import { E2EEncryption } from '../e2ee/E2EEncryption';
