@@ -4,10 +4,12 @@ import { getLogger } from 'jitsi-meet-logger';
 import { $msg, Strophe } from 'strophe.js';
 import 'strophejs-plugin-disco';
 
-import RandomUtil from '../util/RandomUtil';
 import * as JitsiConnectionErrors from '../../JitsiConnectionErrors';
 import * as JitsiConnectionEvents from '../../JitsiConnectionEvents';
+import XMPPEvents from '../../service/xmpp/XMPPEvents';
 import browser from '../browser';
+
+// BEGIN From the old branch
 import MucConnectionPlugin from './strophe.emuc';
 import VCardConnectionPlugin from './strophe.vcard';
 import JingleConnectionPlugin from './strophe.jingle';
@@ -15,11 +17,21 @@ import initStropheUtil from './strophe.util';
 import PingConnectionPlugin from './strophe.ping';
 import RayoConnectionPlugin from './strophe.rayo';
 import initStropheLogger from './strophe.logger';
-import Listenable from '../util/Listenable';
-import Caps from './Caps';
+// END
+
+import { E2EEncryption } from '../e2ee/E2EEncryption';
 import GlobalOnErrorHandler from '../util/GlobalOnErrorHandler';
-import XMPPEvents from '../../service/xmpp/XMPPEvents';
+
+import Listenable from '../util/Listenable';
+import RandomUtil from '../util/RandomUtil';
+
+import Caps from './Caps';
 import XmppConnection from './XmppConnection';
+import MucConnectionPlugin from './strophe.emuc';
+import JingleConnectionPlugin from './strophe.jingle';
+import initStropheLogger from './strophe.logger';
+import RayoConnectionPlugin from './strophe.rayo';
+import initStropheUtil from './strophe.util';
 
 const logger = getLogger(__filename);
 
@@ -32,9 +44,10 @@ const logger = getLogger(__filename);
  * @param {string} options.serviceUrl - The service URL for XMPP connection.
  * @param {string} options.enableWebsocketResume - True to enable stream resumption.
  * @param {number} [options.websocketKeepAlive] - See {@link XmppConnection} constructor.
+ * @param {Object} [options.xmppPing] - See {@link XmppConnection} constructor.
  * @returns {XmppConnection}
  */
-function createConnection({ enableWebsocketResume, serviceUrl = '/http-bind', token, websocketKeepAlive }) {
+function createConnection({ enableWebsocketResume, serviceUrl = '/http-bind', token, websocketKeepAlive, xmppPing }) {
     // Append token as URL param
     if (token) {
         // eslint-disable-next-line no-param-reassign
@@ -44,7 +57,8 @@ function createConnection({ enableWebsocketResume, serviceUrl = '/http-bind', to
     return new XmppConnection({
         enableWebsocketResume,
         serviceUrl,
-        websocketKeepAlive
+        websocketKeepAlive,
+        xmppPing
     });
 }
 
@@ -64,9 +78,7 @@ function initStropheNativePlugins() {
  * A list of ice servers to use by default for P2P.
  */
 export const DEFAULT_STUN_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
+    { urls: 'stun:meet-jit-si-turnrelay.jitsi.net:443' }
 ];
 
 /**
@@ -91,6 +103,7 @@ export default class XMPP extends Listenable {
      * module try to resume the session in case the Websocket connection breaks.
      * @param {number} [options.websocketKeepAlive] - The websocket keep alive interval. See {@link XmppConnection}
      * constructor for more details.
+     * @param {Object} [options.xmppPing] - The xmpp ping settings.
      * @param {Array<Object>} options.p2pStunServers see {@link JingleConnectionPlugin} for more details.
      * @param token
      */
@@ -111,7 +124,8 @@ export default class XMPP extends Listenable {
             // FIXME remove deprecated bosh option at some point
             serviceUrl: options.serviceUrl || options.bosh,
             token,
-            websocketKeepAlive: options.websocketKeepAlive
+            websocketKeepAlive: options.websocketKeepAlive,
+            xmppPing: options.xmppPing
         });
 
         this._initStrophePlugins();
@@ -148,8 +162,12 @@ export default class XMPP extends Listenable {
         this.caps.addFeature('urn:xmpp:jingle:apps:rtp:audio');
         this.caps.addFeature('urn:xmpp:jingle:apps:rtp:video');
 
-        if (!this.options.disableRtx && browser.supportsRtx()) {
+        // Disable RTX on Firefox because of https://bugzilla.mozilla.org/show_bug.cgi?id=1668028.
+        if (!(this.options.disableRtx || browser.isFirefox())) {
             this.caps.addFeature('urn:ietf:rfc:4588');
+        }
+        if (this.options.enableOpusRed === true && browser.supportsAudioRed()) {
+            this.caps.addFeature('http://jitsi.org/opus-red');
         }
 
         // this is dealt with by SDP O/A so we don't need to announce this
@@ -164,7 +182,7 @@ export default class XMPP extends Listenable {
         // this.caps.addFeature('urn:ietf:rfc:5576'); // a=ssrc
 
         // Enable Lipsync ?
-        if (browser.isChrome() && this.options.enableLipSync === true) {
+        if (browser.isChromiumBased() && this.options.enableLipSync === true) {
             logger.info('Lip-sync enabled !');
             this.caps.addFeature('http://jitsi.org/meet/lipsync');
         }
@@ -173,18 +191,9 @@ export default class XMPP extends Listenable {
             this.caps.addFeature('urn:xmpp:rayo:client:1');
         }
 
-        if (browser.supportsInsertableStreams()) {
+        if (E2EEncryption.isSupported(this.options)) {
             this.caps.addFeature('https://jitsi.org/meet/e2ee');
         }
-    }
-
-    /**
-     * Returns {@code true} if the PING functionality is supported by the server
-     * or {@code false} otherwise.
-     * @returns {boolean}
-     */
-    isPingSupported() {
-        return this._pingSupported !== false;
     }
 
     /**
@@ -215,12 +224,8 @@ export default class XMPP extends Listenable {
             now);
 
         this.eventEmitter.emit(XMPPEvents.CONNECTION_STATUS_CHANGED, credentials, status, msg);
-        if (status === Strophe.Status.CONNECTED
-            || status === Strophe.Status.ATTACHED) {
-            if (this.options.useStunTurn
-                || (this.options.p2p && this.options.p2p.useStunTurn)) {
-                this.connection.jingle.getStunAndTurnCredentials();
-            }
+        if (status === Strophe.Status.CONNECTED || status === Strophe.Status.ATTACHED) {
+            this.connection.jingle.getStunAndTurnCredentials();
 
             logger.info(`My Jabber ID: ${this.connection.jid}`);
 
@@ -233,11 +238,9 @@ export default class XMPP extends Listenable {
             // FIXME no need to do it again on stream resume
             this.caps.getFeaturesAndIdentities(pingJid)
                 .then(({ features, identities }) => {
-                    if (features.has(Strophe.NS.PING)) {
-                        this._pingSupported = true;
-                        this.connection.ping.startInterval(pingJid);
-                    } else {
-                        logger.warn(`Ping NOT supported by ${pingJid}`);
+                    if (!features.has(Strophe.NS.PING)) {
+                        logger.error(
+                            `Ping NOT supported by ${pingJid} - please enable ping in your XMPP server config`);
                     }
 
                     // check for speakerstats
@@ -248,6 +251,20 @@ export default class XMPP extends Listenable {
 
                         if (identity.type === 'conference_duration') {
                             this.conferenceDurationComponentAddress = identity.name;
+                        }
+
+                        if (identity.type === 'lobbyrooms') {
+                            this.lobbySupported = true;
+                            identity.name && this.caps.getFeaturesAndIdentities(identity.name, identity.type)
+                                .then(({ features: f }) => {
+                                    f.forEach(fr => {
+                                        if (fr.endsWith('#displayname_required')) {
+                                            this.eventEmitter.emit(
+                                                JitsiConnectionEvents.DISPLAY_NAME_REQUIRED);
+                                        }
+                                    });
+                                })
+                                .catch(e => logger.warn('Error getting features from lobby.', e && e.message));
                         }
                     });
 
@@ -470,7 +487,9 @@ export default class XMPP extends Listenable {
      * @returns {Promise} Resolves with an instance of a strophe muc.
      */
     createRoom(roomName, options, onCreateResource) {
-        let roomjid = `${roomName}@${this.options.hosts.muc}/`;
+        // There are cases (when using subdomain) where muc can hold an uppercase part
+        let roomjid = `${roomName}@${options.customDomain
+            ? options.customDomain : this.options.hosts.muc.toLowerCase()}/`;
 
         const mucNickname = onCreateResource
             ? onCreateResource(this.connection.jid, this.authenticatedUser)
@@ -517,20 +536,15 @@ export default class XMPP extends Listenable {
     }
 
     /**
-     * Pings the server. Remember to check {@link isPingSupported} before using
-     * this method.
+     * Pings the server.
      * @param timeout how many ms before a timeout should occur.
      * @returns {Promise} resolved on ping success and reject on an error or
      * a timeout.
      */
     ping(timeout) {
         return new Promise((resolve, reject) => {
-            if (this.isPingSupported()) {
-                this.connection.ping
+            this.connection.ping
                     .ping(this.connection.domain, resolve, reject, timeout);
-            } else {
-                reject('PING operation is not supported by the server');
-            }
         });
     }
 
@@ -643,7 +657,6 @@ export default class XMPP extends Listenable {
         this.connection.addConnectionPlugin('vcard', new VCardConnectionPlugin(this));
         this.connection.addConnectionPlugin('emuc', new MucConnectionPlugin(this));
         this.connection.addConnectionPlugin('jingle', new JingleConnectionPlugin(this, this.eventEmitter, iceConfig));
-        this.connection.addConnectionPlugin('ping', new PingConnectionPlugin(this));
         this.connection.addConnectionPlugin('rayo', new RayoConnectionPlugin());
     }
 
@@ -742,6 +755,8 @@ export default class XMPP extends Listenable {
                     + 'structure', 'topic: ', type);
             }
         } catch (e) {
+            logger.error(e);
+
             return false;
         }
 
@@ -760,7 +775,7 @@ export default class XMPP extends Listenable {
 
         if (!(from === this.speakerStatsComponentAddress
             || from === this.conferenceDurationComponentAddress)) {
-            return;
+            return true;
         }
 
         const jsonMessage = $(msg).find('>json-message')
