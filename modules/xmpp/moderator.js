@@ -1,15 +1,16 @@
 /* global $, Promise */
 
-const logger = require('jitsi-meet-logger').getLogger(__filename);
-
+import { getLogger } from 'jitsi-meet-logger';
 import { $iq, Strophe } from 'strophe.js';
 
-const XMPPEvents = require('../../service/xmpp/XMPPEvents');
+import Settings from '../settings/Settings';
+
 const AuthenticationEvents
     = require('../../service/authentication/AuthenticationEvents');
+const XMPPEvents = require('../../service/xmpp/XMPPEvents');
 const GlobalOnErrorHandler = require('../util/GlobalOnErrorHandler');
 
-import Settings from '../settings/Settings';
+const logger = getLogger(__filename);
 
 /**
  *
@@ -54,12 +55,9 @@ export default function Moderator(roomName, xmpp, emitter, options) {
     this.externalAuthEnabled = false;
     this.options = options;
 
-    // Sip gateway can be enabled by configuring Jigasi host in config.js or
-    // it will be enabled automatically if focus detects the component through
-    // service discovery.
-    this.sipGatewayEnabled
-        = this.options.connection.hosts
-            && this.options.connection.hosts.call_control !== undefined;
+    // Whether SIP gateway (jigasi) support is enabled. This is set
+    // based on conference properties received in presence.
+    this.sipGatewayEnabled = false;
 
     this.eventEmitter = emitter;
 
@@ -159,63 +157,13 @@ Moderator.prototype.createConferenceIq = function() {
     if (sessionId) {
         elem.attrs({ 'session-id': sessionId });
     }
-    if (this.options.connection.enforcedBridge !== undefined) {
-        elem.c(
-            'property', {
-                name: 'enforcedBridge',
-                value: this.options.connection.enforcedBridge
-            }).up();
-    }
 
-    // Tell the focus we have Jigasi configured
-    if (this.options.connection.hosts !== undefined
-        && this.options.connection.hosts.call_control !== undefined) {
-        elem.c(
-            'property', {
-                name: 'call_control',
-                value: this.options.connection.hosts.call_control
-            }).up();
-    }
-    if (config.channelLastN !== undefined) {
-        elem.c(
-            'property', {
-                name: 'channelLastN',
-                value: config.channelLastN
-            }).up();
-    }
     elem.c(
         'property', {
             name: 'disableRtx',
             value: Boolean(config.disableRtx)
         }).up();
 
-    if (config.enableTcc !== undefined) {
-        elem.c(
-                'property', {
-                    name: 'enableTcc',
-                    value: Boolean(config.enableTcc)
-                }).up();
-    }
-    if (config.enableRemb !== undefined) {
-        elem.c(
-                'property', {
-                    name: 'enableRemb',
-                    value: Boolean(config.enableRemb)
-                }).up();
-    }
-    if (config.minParticipants !== undefined) {
-        elem.c(
-                'property', {
-                    name: 'minParticipants',
-                    value: config.minParticipants
-                }).up();
-    }
-
-    elem.c(
-        'property', {
-            name: 'enableLipSync',
-            value: this.options.connection.enableLipSync === true
-        }).up();
     if (config.audioPacketDelay !== undefined) {
         elem.c(
             'property', {
@@ -237,36 +185,14 @@ Moderator.prototype.createConferenceIq = function() {
                 value: config.minBitrate
             }).up();
     }
-    if (config.testing && config.testing.octo
-        && typeof config.testing.octo.probability === 'number') {
-        if (Math.random() < config.testing.octo.probability) {
-            elem.c(
-                'property', {
-                    name: 'octo',
-                    value: true
-                }).up();
-        }
+
+    if (config.opusMaxAverageBitrate) {
+        elem.c(
+            'property', {
+                name: 'opusMaxAverageBitrate',
+                value: config.opusMaxAverageBitrate
+            }).up();
     }
-
-    let openSctp;
-
-    switch (this.options.conference.openBridgeChannel) {
-    case 'datachannel':
-    case true:
-    case undefined:
-        openSctp = true;
-        break;
-    case 'websocket':
-        openSctp = false;
-        break;
-    }
-
-    elem.c(
-        'property', {
-            name: 'openSctp',
-            value: openSctp
-        }).up();
-
     if (this.options.conference.startAudioMuted !== undefined) {
         elem.c(
             'property', {
@@ -286,13 +212,6 @@ Moderator.prototype.createConferenceIq = function() {
             'property', {
                 name: 'stereo',
                 value: this.options.conference.stereo
-            }).up();
-    }
-    if (this.options.conference.useRoomAsSharedDocumentName !== undefined) {
-        elem.c(
-            'property', {
-                name: 'useRoomAsSharedDocumentName',
-                value: this.options.conference.useRoomAsSharedDocumentName
             }).up();
     }
     elem.up();
@@ -340,8 +259,7 @@ Moderator.prototype.parseConfigOptions = function(resultIq) {
     this.eventEmitter.emit(AuthenticationEvents.IDENTITY_UPDATED,
         authenticationEnabled, authIdentity);
 
-    // Check if focus has auto-detected Jigasi component(this will be also
-    // included if we have passed our host from the config)
+    // Check if jicofo has jigasi support enabled.
     if ($(resultIq).find(
         '>conference>property'
         + '[name=\'sipGatewayEnabled\'][value=\'true\']').length) {

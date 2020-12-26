@@ -1,11 +1,13 @@
-import browser from '../browser';
-import { browsers } from 'js-utils';
+import { browsers } from '@jitsi/js-utils';
+import { getLogger } from 'jitsi-meet-logger';
 
-import * as StatisticsEvents from '../../service/statistics/Events';
 import * as MediaType from '../../service/RTC/MediaType';
+import * as StatisticsEvents from '../../service/statistics/Events';
+import browser from '../browser';
 
 const GlobalOnErrorHandler = require('../util/GlobalOnErrorHandler');
-const logger = require('jitsi-meet-logger').getLogger(__filename);
+
+const logger = getLogger(__filename);
 
 /**
  * The lib-jitsi-meet browser-agnostic names of the browser-specific keys
@@ -38,6 +40,7 @@ KEYS_BY_BROWSER_TYPE[browsers.CHROME] = {
     'packetsLost': 'packetsLost',
     'bytesReceived': 'bytesReceived',
     'bytesSent': 'bytesSent',
+    'googCodecName': 'googCodecName',
     'googFrameHeightReceived': 'googFrameHeightReceived',
     'googFrameWidthReceived': 'googFrameWidthReceived',
     'googFrameHeightSent': 'googFrameHeightSent',
@@ -53,6 +56,18 @@ KEYS_BY_BROWSER_TYPE[browsers.CHROME] = {
     'port': 'port',
     'protocol': 'protocol'
 };
+KEYS_BY_BROWSER_TYPE[browsers.REACT_NATIVE] = {
+    'packetsReceived': 'packetsReceived',
+    'packetsSent': 'packetsSent',
+    'bytesReceived': 'bytesReceived',
+    'bytesSent': 'bytesSent',
+    'frameWidth': 'frameWidth',
+    'frameHeight': 'frameHeight',
+    'framesPerSecond': 'framesPerSecond',
+    'ip': 'ip',
+    'port': 'port',
+    'protocol': 'protocol'
+};
 KEYS_BY_BROWSER_TYPE[browsers.OPERA]
     = KEYS_BY_BROWSER_TYPE[browsers.CHROME];
 KEYS_BY_BROWSER_TYPE[browsers.NWJS]
@@ -60,8 +75,6 @@ KEYS_BY_BROWSER_TYPE[browsers.NWJS]
 KEYS_BY_BROWSER_TYPE[browsers.ELECTRON]
     = KEYS_BY_BROWSER_TYPE[browsers.CHROME];
 KEYS_BY_BROWSER_TYPE[browsers.SAFARI]
-    = KEYS_BY_BROWSER_TYPE[browsers.CHROME];
-KEYS_BY_BROWSER_TYPE[browsers.REACT_NATIVE]
     = KEYS_BY_BROWSER_TYPE[browsers.CHROME];
 
 /**
@@ -92,6 +105,7 @@ function SsrcStats() {
     };
     this.resolution = {};
     this.framerate = 0;
+    this.codec = '';
 }
 
 /**
@@ -135,6 +149,10 @@ SsrcStats.prototype.resetBitrate = function() {
  */
 SsrcStats.prototype.setFramerate = function(framerate) {
     this.framerate = framerate || 0;
+};
+
+SsrcStats.prototype.setCodec = function(codec) {
+    this.codec = codec || '';
 };
 
 /**
@@ -206,8 +224,7 @@ export default function StatsCollector(
     const keys = KEYS_BY_BROWSER_TYPE[this._browserType];
 
     if (!keys) {
-        // eslint-disable-next-line no-throw-literal
-        throw `The browser type '${this._browserType}' isn't supported!`;
+        throw new Error(`The browser type '${this._browserType}' isn't supported!`);
     }
 
     /**
@@ -215,7 +232,7 @@ export default function StatsCollector(
      * @type {boolean}
      */
     this._usesPromiseGetStats
-        = browser.isSafari() || browser.isFirefox();
+        = browser.isSafari() || browser.isFirefox() || browser.isReactNative();
 
     /**
      * The function which is to be used to retrieve the value associated in a
@@ -284,43 +301,63 @@ StatsCollector.prototype.errorCallback = function(error) {
  * Starts stats updates.
  */
 StatsCollector.prototype.start = function(startAudioLevelStats) {
-    const self = this;
-
     if (startAudioLevelStats) {
+        if (browser.supportsReceiverStats()) {
+            logger.info('Using RTCRtpSynchronizationSource for remote audio levels');
+        }
         this.audioLevelsIntervalId = setInterval(
             () => {
-                // Interval updates
-                self.peerconnection.getStats(
-                    report => {
-                        let results = null;
+                if (browser.supportsReceiverStats()) {
+                    const audioLevels = this.peerconnection.getAudioLevels();
 
-                        if (!report || !report.result
-                            || typeof report.result !== 'function') {
-                            results = report;
-                        } else {
-                            results = report.result();
-                        }
-                        self.currentAudioLevelsReport = results;
-                        if (this._usesPromiseGetStats) {
-                            self.processNewAudioLevelReport();
-                        } else {
-                            self.processAudioLevelReport();
-                        }
+                    for (const ssrc in audioLevels) {
+                        if (audioLevels.hasOwnProperty(ssrc)) {
+                            // Use a scaling factor of 2.5 to report the same
+                            // audio levels that getStats reports.
+                            const audioLevel = audioLevels[ssrc] * 2.5;
 
-                        self.baselineAudioLevelsReport
-                            = self.currentAudioLevelsReport;
-                    },
-                    error => self.errorCallback(error)
-                );
+                            this.eventEmitter.emit(
+                                StatisticsEvents.AUDIO_LEVEL,
+                                this.peerconnection,
+                                Number.parseInt(ssrc, 10),
+                                audioLevel,
+                                false /* isLocal */);
+                        }
+                    }
+                } else {
+                    // Interval updates
+                    this.peerconnection.getStats(
+                        report => {
+                            let results = null;
+
+                            if (!report || !report.result
+                                || typeof report.result !== 'function') {
+                                results = report;
+                            } else {
+                                results = report.result();
+                            }
+                            this.currentAudioLevelsReport = results;
+                            if (this._usesPromiseGetStats) {
+                                this.processNewAudioLevelReport();
+                            } else {
+                                this.processAudioLevelReport();
+                            }
+
+                            this.baselineAudioLevelsReport
+                                = this.currentAudioLevelsReport;
+                        },
+                        error => this.errorCallback(error)
+                    );
+                }
             },
-            self.audioLevelsIntervalMilis
+            this.audioLevelsIntervalMilis
         );
     }
 
     this.statsIntervalId = setInterval(
         () => {
             // Interval updates
-            self.peerconnection.getStats(
+            this.peerconnection.getStats(
                 report => {
                     let results = null;
 
@@ -333,24 +370,24 @@ StatsCollector.prototype.start = function(startAudioLevelStats) {
                         results = report.result();
                     }
 
-                    self.currentStatsReport = results;
+                    this.currentStatsReport = results;
                     try {
                         if (this._usesPromiseGetStats) {
-                            self.processNewStatsReport();
+                            this.processNewStatsReport();
                         } else {
-                            self.processStatsReport();
+                            this.processStatsReport();
                         }
                     } catch (e) {
                         GlobalOnErrorHandler.callErrorHandler(e);
                         logger.error(`Unsupported key:${e}`, e);
                     }
 
-                    self.previousStatsReport = self.currentStatsReport;
+                    this.previousStatsReport = this.currentStatsReport;
                 },
-                error => self.errorCallback(error)
+                error => this.errorCallback(error)
             );
         },
-        self.statsIntervalMilis
+        this.statsIntervalMilis
     );
 };
 
@@ -373,8 +410,7 @@ StatsCollector.prototype._defineGetStatValueMethod = function(keys) {
             return key;
         }
 
-        // eslint-disable-next-line no-throw-literal
-        throw `The property '${name}' isn't supported!`;
+        throw new Error(`The property '${name}' isn't supported!`);
     };
 
     // Define the function which retrieves the value from a specific report
@@ -395,27 +431,6 @@ StatsCollector.prototype._defineGetStatValueMethod = function(keys) {
         // likely that whoever defined it wanted you to call it in order to
         // retrieve the value associated with a specific key.
         itemStatByKey = (item, key) => item.stat(key);
-        break;
-    case browsers.REACT_NATIVE:
-        // The implementation provided by react-native-webrtc follows the
-        // Objective-C WebRTC API: RTCStatsReport has a values property of type
-        // Array in which each element is a key-value pair.
-        itemStatByKey = function(item, key) {
-            let value;
-
-            item.values.some(pair => {
-                if (pair.hasOwnProperty(key)) {
-                    value = pair[key];
-
-                    return true;
-                }
-
-                return false;
-
-            });
-
-            return value;
-        };
         break;
     default:
         itemStatByKey = (item, key) => item[key];
@@ -693,7 +708,17 @@ StatsCollector.prototype.processStatsReport = function() {
         } else {
             ssrcStats.setResolution(null);
         }
+
+        let codec;
+
+        // Try to get the codec for later reporting.
+        try {
+            codec = getStatValue(now, 'googCodecName') || '';
+        } catch (e) { /* not supported*/ }
+
+        ssrcStats.setCodec(codec);
     }
+
 
     this.eventEmitter.emit(
         StatisticsEvents.BYTE_SENT_STATS, this.peerconnection, byteSentStats);
@@ -718,10 +743,13 @@ StatsCollector.prototype._processAndEmitReport = function() {
     let bitrateUpload = 0;
     const resolutions = {};
     const framerates = {};
+    const codecs = {};
     let audioBitrateDownload = 0;
     let audioBitrateUpload = 0;
+    let audioCodec;
     let videoBitrateDownload = 0;
     let videoBitrateUpload = 0;
+    let videoCodec;
 
     for (const [ ssrc, ssrcStats ] of this.ssrc2stats) {
         // process packet loss stats
@@ -742,9 +770,11 @@ StatsCollector.prototype._processAndEmitReport = function() {
             if (track.isAudioTrack()) {
                 audioBitrateDownload += ssrcStats.bitrate.download;
                 audioBitrateUpload += ssrcStats.bitrate.upload;
+                audioCodec = ssrcStats.codec;
             } else {
                 videoBitrateDownload += ssrcStats.bitrate.download;
                 videoBitrateUpload += ssrcStats.bitrate.upload;
+                videoCodec = ssrcStats.codec;
             }
 
             const participantId = track.getParticipantId();
@@ -766,6 +796,17 @@ StatsCollector.prototype._processAndEmitReport = function() {
 
                     userFramerates[ssrc] = ssrcStats.framerate;
                     framerates[participantId] = userFramerates;
+                }
+                if (audioCodec && videoCodec) {
+                    const codecDesc = {
+                        'audio': audioCodec,
+                        'video': videoCodec
+                    };
+
+                    const userCodecs = codecs[participantId] || {};
+
+                    userCodecs[ssrc] = codecDesc;
+                    codecs[participantId] = userCodecs;
                 }
             } else {
                 logger.error(`No participant ID returned by ${track}`);
@@ -833,6 +874,7 @@ StatsCollector.prototype._processAndEmitReport = function() {
             'packetLoss': this.conferenceStats.packetLoss,
             'resolution': resolutions,
             'framerate': framerates,
+            'codec': codecs,
             'transport': this.conferenceStats.transport,
             localAvgAudioLevels,
             avgAudioLevels
@@ -961,8 +1003,7 @@ StatsCollector.prototype._defineNewGetStatValueMethod = function(keys) {
             return key;
         }
 
-        // eslint-disable-next-line no-throw-literal
-        throw `The property '${name}' isn't supported!`;
+        throw new Error(`The property '${name}' isn't supported!`);
     };
 
     // Compose the 2 functions defined above to get a function which retrieves
@@ -1136,6 +1177,31 @@ StatsCollector.prototype.processNewStatsReport = function() {
                 isDownloadStream
             });
 
+            const resolution = {
+                height: null,
+                width: null
+            };
+
+            try {
+                resolution.height = getStatValue(now, 'frameHeight');
+                resolution.width = getStatValue(now, 'frameWidth');
+            } catch (e) { /* not supported*/ }
+
+            // Tries to get frame rate
+            let frameRate;
+
+            try {
+                frameRate = getStatValue(now, 'framesPerSecond');
+            } catch (err) { /* not supported*/ }
+
+            ssrcStats.setFramerate(Math.round(frameRate || 0));
+
+            if (resolution.height && resolution.width) {
+                ssrcStats.setResolution(resolution);
+            } else {
+                ssrcStats.setResolution(null);
+            }
+
             if (now.type === 'inbound-rtp') {
 
                 ssrcStats.addBitrate({
@@ -1167,6 +1233,25 @@ StatsCollector.prototype.processNewStatsReport = function() {
 
             if (framerateMean) {
                 ssrcStats.setFramerate(Math.round(framerateMean || 0));
+            }
+
+
+            let codec;
+
+            // Try to get the codec for later reporting.
+            try {
+                codec = this.currentStatsReport.get(now.codecId);
+            } catch (e) { /* not supported*/ }
+
+            if (codec) {
+                /**
+                 * The mime type has the following form: video/VP8 or audio/ISAC,
+                 * so we what to keep just the type after the '/', audio and video
+                 * keys will be added on the processing side.
+                 */
+                const codecShortType = codec.mimeType.split('/')[1];
+
+                codecShortType && ssrcStats.setCodec(codecShortType);
             }
 
         // track for resolution

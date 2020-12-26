@@ -69,7 +69,7 @@ let _fabrics;
 
 /**
  * An instance of this class is a wrapper for the CallStats API fabric. A fabric
- * reports one peer connection the the CallStats backend and is allocated with
+ * reports one peer connection to the CallStats backend and is allocated with
  * {@link callstats.addNewFabric}. It has a bunch of instance methods for
  * reporting various events. A fabric is considered disposed when
  * {@link CallStats.sendTerminateEvent} is executed.
@@ -376,7 +376,7 @@ export default class CallStats {
                 const match = options.confID.match(/.*\/(.*)\/.*/);
 
                 // if there is no tenant, we will just set '/'
-                configParams.siteID = (match && match[1]) || '/';
+                configParams.siteID = options.siteID || (match && match[1]) || '/';
             }
 
             // userID is generated or given by the origin server
